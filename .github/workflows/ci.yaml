@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+  pull_request:
+  schedule:
+    # Every monday at 0:00
+    - cron: '0 0 * * 1'
+jobs:
+  build-all:
+    name: CI
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - "3.1"
+          - "5.0"
+          - "6.0"
+        container:
+          - registry.access.redhat.com/ubi8
+          - registry.fedoraproject.org/fedora
+    container:
+      image: ${{ matrix.container }}
+      options: --security-opt seccomp=unconfined --privileged
+      volumes:
+        - /var/lib/containers/:/var/lib/containers
+    steps:
+      - uses: actions/checkout@v2
+      - run: |
+          set -euo pipefail
+          dnf install -yq jq podman fuse-overlayfs
+          sed -i -E 's|\[storage.options\]|[storage.options]\nmount_program="/usr/bin/fuse-overlayfs"|' /etc/containers/storage.conf
+          (source /etc/os-release ;
+           if [[ $ID == "fedora" ]]; then
+             # events_logger=file is already the default in RHEL 8
+             sed -E 's|(#events_logger = "journald")|\1\nevents_logger = "file"|' /usr/share/containers/containers.conf > /etc/containers/containers.conf
+           fi)
+          curl -sSL -o source-to-image-linux-amd64.tar.gz https://github.com/openshift/source-to-image/releases/download/v1.3.1/source-to-image-v1.3.1-a5a77147-linux-amd64.tar.gz
+          tar xf source-to-image-linux-amd64.tar.gz
+          mv sti s2i /usr/bin
+      - run: ./build.sh
+        env:
+          DEBUG: "true"
+          FORCE: "true"
+          SKIP_VERSION_CHECK: "true"
+          VERSIONS: "${{ matrix.version }}"
+      - run: |
+          cd ..
+          # delete directory, replace with empty
+          rm -rf s2i-dotnetcore
+          mkdir -p s2i-dotnetcore
+        if: always()
